@@ -1,54 +1,32 @@
-#ifndef BankSystem
-#define BankSystem
+#ifndef BANKSYSTEM_H
+#define BANKSYSTEM_H
 
 #include <pthread.h>
-#include <stdlib.h>
-#include <stdio.h>
+#include <stddef.h>
 #include <sys/types.h>
-#include <sys/socket.h>
 
-#define ServerPort 1080
-#define AccountNameSize 100
-#define MaxAccounts 20
-#define commandThrottle 1
-#define connectRetryInterval 3
-#define commandLen 7
-#define MaxSessions 20
-#define SessionTimeout 20
-#define MaxInputSize 256
+#define SERVER_PORT 1080
+#define MAX_ACCOUNTS 20
+#define MAX_SESSIONS 20
+#define ACCOUNT_NAME_SIZE 100
+#define MAX_INPUT_SIZE 256
 
-char msgDelimiter = '\n';
+typedef struct {
+    char name[ACCOUNT_NAME_SIZE];
+    double balance;
+    pid_t owner_pid; /* 0 means no client currently owns the account session. */
+} Account;
 
-struct account {
-    char name[AccountNameSize];
-    float balance;
-    int inSession;
-    pthread_mutex_t mutex;
-};
+typedef struct {
+    Account accounts[MAX_ACCOUNTS];
+    size_t account_count;
+    pthread_mutex_t mutex; /* Initialized as process-shared by the server. */
+} Bank;
 
-struct bank {
-    struct account accounts[MaxAccounts];
-    int accountCounter;
-    pthread_mutex_t mutex;
-};
+/* Read one newline-terminated message. Returns 1 on success, 0 on disconnect, -1 on error. */
+int socket_read_line(int socket_fd, char *buffer, size_t capacity);
 
-int socketWrite(int socket, char *socketBuffer, int bufferLen) {
-    socketBuffer[bufferLen++] = msgDelimiter;
-    if (send(socket, socketBuffer, bufferLen, 0) != bufferLen) {
-        perror("socketWrite: Unable to send message to client");
-        bufferLen = 0;
-    }
-    return bufferLen;
-}
-
-int socketRead(int socket, char *socketBuffer, int bufferLen) {
-    int idx1 = 0;
-    while ((recv(socket, &socketBuffer[idx1], 1, 0) == 1) && (idx1 < bufferLen)) {
-        if (socketBuffer[idx1++] == msgDelimiter)
-            break;
-    }
-    socketBuffer[--idx1] = '\0';
-    return idx1;
-}
+/* Send an entire newline-terminated message. Returns 0 on success, -1 on error. */
+int socket_write_line(int socket_fd, const char *message);
 
 #endif

@@ -1,367 +1,356 @@
+#define _POSIX_C_SOURCE 200809L
+#include "banksystem.h"
+
+#include <arpa/inet.h>
+#include <errno.h>
+#include <math.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <strings.h>
 #include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
-#include <sys/shm.h>
-#include <sys/stat.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include "bankSystem.h"
+#include <unistd.h>
 
-static pid_t createChildProcess(void (func)(int), int opt);
-static int allocateMEM();
-static void deallocateMEM(int statusCode);
-static int createSocket(const unsigned short port);
-static void socketService(int clientID);
-static void sessionSignalHandler(int SIGNAL);
-static void sessionHandler(int port);
-static void displayAccountStatus(int SIGNAL);
-static void statusHandler(int timeout);
-static void sig_handler(int SIGNAL);
+static volatile sig_atomic_t stopping = 0;
+static int listen_fd = -1;
+static int shared_memory_id = -1;
+static Bank *bank = NULL;
+static int bank_mutex_initialized = 0;
+static pid_t workers[MAX_SESSIONS];
 
-static int sharedMemID = -1;
-static int serverSocket = -1;
-static pid_t childPID[MaxSessions+2];
-static int serverPID[MaxSessions+2];
-static struct bank *bank = NULL;
-
-static pid_t createChildProcess(void (func)(int), int opt) {
-    pid_t PID = fork();
-    if (PID == 0) {
-        func(opt);
-    } else if (PID == -1) {
-        perror("Server> Unable to create a process");
-        exit(1);
-    } else {
-        printf("Server> Created child process PID %u\n", PID);
+int socket_read_line(int socket_fd, char *buffer, size_t capacity) {
+    size_t used = 0;
+    if (capacity < 2) return -1;
+    for (;;) {
+        char ch;
+        ssize_t received = recv(socket_fd, &ch, 1, 0);
+        if (received == 0) return 0;
+        if (received < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (ch == '\n') {
+            if (used > 0 && buffer[used - 1] == '\r') --used;
+            buffer[used] = '\0';
+            return 1;
+        }
+        if (used + 1 >= capacity) return -1;
+        buffer[used++] = ch;
     }
-    return PID;
 }
 
-static int allocateMEM() {
-    key_t key = ftok("/", 6);
-    if (key == -1) {
-        perror("Unable to create identifier");
-        return 1;
-    }
-    sharedMemID = shmget(key, sizeof(struct bank), IPC_CREAT | IPC_EXCL | S_IRWXU | S_IRWXG | S_IROTH);
-    if (sharedMemID == -1) {
-        perror("Unable to allocate shared memory (-1)");
-        return 1;
-    }
-    bank = (struct bank*) shmat(sharedMemID, NULL, SHM_RND);
-    if (bank == (void*) -1) {
-        perror("Unable to attach share memory");
-        return 1;
-    }
-    int idx1;
-    for (idx1 = 0; idx1 < MaxAccounts; idx1++) {
-        pthread_mutex_init(&bank->accounts[idx1].mutex, NULL);
-    }
-    bank->accountCounter = 0;
-    if (pthread_mutex_init(&bank->mutex, NULL) != 0) {
-        perror("Unable to initialize the thread");
-        return 1;
-    }
-    memset(childPID, 0, sizeof(childPID));
-    return 0;
-}
-
-static void deallocateMEM(int statusCode) {
-    int idx1;
-    if (bank == NULL)
-        exit(statusCode);
-    pthread_mutex_destroy(&bank->mutex);
-    for (idx1 = 0; idx1 < MaxAccounts; idx1++)
-        pthread_mutex_destroy(&bank->accounts[idx1].mutex);
-    if (shmdt(bank) == -1)
-        perror("Unable to detach shared memory");
-    shmctl(sharedMemID, IPC_RMID, NULL);
-    exit(statusCode);
-}
-
-static int createSocket(const unsigned short port) {
-    struct sockaddr_in childSocket;
-    int opt = 1;
-    memset(&childSocket, 0, sizeof(childSocket));
-    childSocket.sin_family = AF_INET;
-    childSocket.sin_addr.s_addr = INADDR_ANY;
-    childSocket.sin_port = htons(port);
-    serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(int)) == -1) {
-        perror("setsockopt");
-        return 1;
-    }
-    if (bind(serverSocket, (struct sockaddr *)&childSocket, sizeof childSocket) == -1) {
-        perror("bind");
-        return 1;
-    }
-    if (listen(serverSocket, 10) == -1) {
-        perror("listen");
-        return 1;
+int socket_write_line(int socket_fd, const char *message) {
+    size_t length = strlen(message);
+    size_t sent = 0;
+    char buffer[MAX_INPUT_SIZE + 2];
+    if (length > MAX_INPUT_SIZE) return -1;
+    memcpy(buffer, message, length);
+    buffer[length++] = '\n';
+    while (sent < length) {
+        ssize_t result = send(socket_fd, buffer + sent, length - sent, MSG_NOSIGNAL);
+        if (result < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (result == 0) return -1;
+        sent += (size_t)result;
     }
     return 0;
 }
 
-static void socketService(int clientID) {
-    int inService = 1;
-    char line[MaxInputSize+commandLen], *command, *value;
-    int clientIdx = -1;
-    int inputSize, idx1;
-    
-    while (inService) {
-        inputSize = socketRead(clientID, line, sizeof(line));
-        command = strtok(line, " ");
-        value = strtok(NULL, "\n");
-        
-        if (strcmp(command, "open") == 0) {
-            if (clientIdx != -1) {
-                inputSize = snprintf(line, MaxInputSize, "Command Error: Session is already opened");
-            } else if (value == NULL) {
-                inputSize = snprintf(line, MaxInputSize, "Command Error: Please provide a name");
-            } else {
-                if (bank->accountCounter >= (MaxAccounts-1)) {
-                    inputSize = snprintf(line, MaxInputSize, "Command Error: Unable to allocate resources");
-                } else {
-                    for (idx1 = 0; idx1 < bank->accountCounter; idx1++) {
-                        if (strcmp(bank->accounts[idx1].name, value) == 0) {
-                            inputSize = snprintf(line, MaxInputSize, "Command Error: Account name already exists. Try start command");
-                            break;
-                        }
-                    }
-                    if (idx1 == bank->accountCounter) {
-                        if (pthread_mutex_lock(&bank->mutex) != 0) {
-                            perror("pthread_mutex_lock ERROR");
-                        }
-                        clientIdx = bank->accountCounter++;
-                        strcpy(bank->accounts[clientIdx].name, value);
-                        bank->accounts[clientIdx].balance = 0.0;
-                        bank->accounts[clientIdx].inSession = 1;
-                        pthread_mutex_lock(&bank->accounts[clientIdx].mutex);
-                        if (pthread_mutex_unlock(&bank->mutex) != 0) {
-                            perror("pthread_mutex_unlock ERROR");
-                        }
-                        inputSize = snprintf(line, MaxInputSize, "Account successfully created - %s", bank->accounts[clientIdx].name);
-                    }
-                }
-            }
-        } else if (strcmp(command, "start") == 0) {
-            if (clientIdx != -1) {
-                inputSize = snprintf(line, MaxInputSize, "Command Error: Session is already opened");
-            } else if (value == NULL) {
-                inputSize = snprintf(line, MaxInputSize, "Command Error: Please provide an account name");
-            } else {
-                int accountIsLocked = 0;
-                if (pthread_mutex_lock(&bank->mutex) != 0) {
-                    perror("pthread_mutex_lock ERROR");
-                }
-                for (idx1 = 0; idx1 < bank->accountCounter; idx1++) {
-                    if (strcmp(bank->accounts[idx1].name, value) == 0) {
-                        clientIdx = idx1;
-                        accountIsLocked = pthread_mutex_trylock(&bank->accounts[idx1].mutex); /* try to lock */
-                        break;
-                    }
-                }
-                if (pthread_mutex_unlock(&bank->mutex) != 0) {
-                    perror("pthread_mutex_unlock ERROR");
-                }
-                if (clientIdx == -1) {
-                    inputSize = snprintf(line, MaxInputSize, "Account not found");
-                } else if (accountIsLocked) {
-                    inputSize = snprintf(line, MaxInputSize, "Account is locked by another user");
-                } else {
-                    bank->accounts[clientIdx].inSession = 1;
-                    inputSize = snprintf(line, MaxInputSize, "%s session reopened", bank->accounts[idx1].name);
-                }
-            }
-        } else if (strcmp(command, "credit") == 0) {
-            if (clientIdx == -1) {
-                inputSize = snprintf(line, MaxInputSize, "Start or open an account before using credit function");
-            } else if (value == NULL) {
-                inputSize = snprintf(line, MaxInputSize, "Please enter an amount to credit");
-            } else {
-                bank->accounts[clientIdx].balance += atof(value);
-                float balance = bank->accounts[clientIdx].balance;
-                inputSize = snprintf(line, MaxInputSize, "%s new balance: %.2f", bank->accounts[clientIdx].name, balance);
-            }
-        } else if (strcmp(command, "debit") == 0) {
-            if (clientIdx == -1) {
-                inputSize = snprintf(line, MaxInputSize, "Start or open an account before using debit function");
-            } else if (value == NULL) {
-                inputSize = snprintf(line, MaxInputSize, "Please enter an amount to credit");
-            } else {
-                float amount_f = atof(value);
-                if (amount_f > bank->accounts[clientIdx].balance) {
-                    inputSize = snprintf(line, MaxInputSize, "Overdraft is not allowed for this account");
-                } else {
-                    bank->accounts[clientIdx].balance -= amount_f;
-                    float balance = bank->accounts[clientIdx].balance;
-                    inputSize = snprintf(line, MaxInputSize, "%s new balance: %.2f", bank->accounts[clientIdx].name, balance);
-                }
-            }
-        } else if (strcmp(command, "balance") == 0) {
-            if (clientIdx == -1) {
-                inputSize = snprintf(line, MaxInputSize, "Start or open an account before using balance function");
-            } else {
-                inputSize = snprintf(line, MaxInputSize, "%s current balance: %.2f", bank->accounts[clientIdx].name, bank->accounts[clientIdx].balance);
-            }
-        } else if (strcmp(command, "finish") == 0) {
-            if (clientIdx == -1) {
-                inputSize = snprintf(line, MaxInputSize, "No open account to finish");
-            } else {
-                bank->accounts[clientIdx].inSession = 0;
-                inputSize = snprintf(line, MaxInputSize, "%s transactions finished", bank->accounts[clientIdx].name);
-                if (pthread_mutex_unlock(&bank->accounts[clientIdx].mutex) != 0) {
-                    perror("pthread_mutex_unlock ERROR");
-                }
-                clientIdx = -1;
-            }
-        } else if (strcmp(command, "exit") == 0) {
-            inputSize = snprintf(line, MaxInputSize, "Have a good day");
-            inService = 0;
-            bank->accounts[clientIdx].inSession = 0;
-            if (pthread_mutex_unlock(&bank->accounts[clientIdx].mutex) != 0) {
-                perror("pthread_mutex_unlock ERROR");
-            }
-            printf("User %i disconnect request granted\n", clientID);
-        } else if (strcmp(command, "SIGINT") == 0) {
-            int idx1, status;
-            pid_t processID = getpid();
-            printf("Abnormal Exit Signal From Client Process %d...\n", processID);
-            for (idx1 = 0; idx1 < MaxSessions+2; idx1++) {
-                if (childPID[idx1] == processID) {
-                    printf("Freeing Session and Mutex Locks For Child Process...\n");
-                    bank->accounts[idx1].inSession = 0;
-                if(pthread_mutex_unlock(&bank->accounts[idx1].mutex) != 0)
-                { perror("pthread_mutex_unlock ERROR"); }
-                }
-                }
-                kill(childPID[idx1], SIGTERM);
-                waitpid(childPID[idx1], &status, 0);
-                childPID[idx1] = 0;
-                deallocateMEM(0);
-                }
-                else
-                {
-                inputSize = snprintf(line, MaxInputSize, "I don't understand that
-                command!!!");
-                }
-            if(socketWrite(clientID, line, inputSize) == 0) snprintf(line,
-            MaxInputSize, "Do you need help?");
-            }
-            if(clientIdx == -1)
-            { 
-            printf ("In-SESSION = %i", bank->accounts[clientIdx].inSession);
-            printf("Client disconnected for unknown reason\n");
-            }
-    shutdown(clientID, SHUT_RDWR);
-    close(clientID);
+static void handle_signal(int signal_number) {
+    (void)signal_number;
+    stopping = 1;
 }
 
-static void sessionSignalHandler(int SIGNAL) {
-    int idx1 = 0;
-    char *end = "TERMINATE";
-    puts("Terminating Session Handler Child Processes...");
-    if (SIGNAL == SIGTERM) {
-        for (; idx1 < MaxSessions+2; idx1++) {
-            printf("Terminating Child Process %d\n", childPID[idx1]);
-            kill(childPID[idx1], SIGTERM);
-            waitpid(childPID[idx1], 0, 0);
+static int lock_bank(void) {
+    int result = pthread_mutex_lock(&bank->mutex);
+    if (result != 0) {
+        errno = result;
+        perror("pthread_mutex_lock");
+        return -1;
+    }
+    return 0;
+}
+
+static void unlock_bank(void) {
+    int result = pthread_mutex_unlock(&bank->mutex);
+    if (result != 0) {
+        errno = result;
+        perror("pthread_mutex_unlock");
+    }
+}
+
+static void release_account(int account_index, pid_t owner) {
+    if (account_index < 0 || lock_bank() != 0) return;
+    if (bank->accounts[account_index].owner_pid == owner)
+        bank->accounts[account_index].owner_pid = 0;
+    unlock_bank();
+}
+
+static int find_account(const char *name) {
+    size_t i;
+    for (i = 0; i < bank->account_count; ++i)
+        if (strcmp(bank->accounts[i].name, name) == 0) return (int)i;
+    return -1;
+}
+
+static int parse_amount(const char *text, double *amount) {
+    char *end = NULL;
+    double value;
+    if (text == NULL || *text == '\0') return 0;
+    errno = 0;
+    value = strtod(text, &end);
+    while (end != NULL && (*end == ' ' || *end == '\t')) ++end;
+    if (errno != 0 || end == text || *end != '\0' || !isfinite(value) || value < 0)
+        return 0;
+    *amount = value;
+    return 1;
+}
+
+static int process_command(const char *line, int *active_account, char *reply, size_t reply_size) {
+    char command[32];
+    char argument[MAX_INPUT_SIZE + 1];
+    const char *cursor = line;
+    size_t command_length = 0;
+    pid_t self = getpid();
+    double amount;
+
+    while (*cursor == ' ' || *cursor == '\t') ++cursor;
+    while (cursor[command_length] && cursor[command_length] != ' ' && cursor[command_length] != '\t') {
+        if (command_length + 1 >= sizeof(command)) {
+            snprintf(reply, reply_size, "Command is too long");
+            return 0;
         }
+        command[command_length] = cursor[command_length];
+        ++command_length;
     }
-}
+    command[command_length] = '\0';
+    cursor += command_length;
+    while (*cursor == ' ' || *cursor == '\t') ++cursor;
+    snprintf(argument, sizeof(argument), "%s", cursor);
+    {
+        size_t n = strlen(argument);
+        while (n > 0 && (argument[n - 1] == ' ' || argument[n - 1] == '\t')) argument[--n] = '\0';
+    }
 
-static void sessionHandler(int port) {
-    struct sockaddr_in childSocket;
-    socklen_t socketLen = sizeof(childSocket);
-    int idx1, clientIdx;
-    signal(SIGCHLD, sessionSignalHandler);
-    if (createSocket(port) == 1) {
-        fprintf(stderr, "sessionHandler: Unable to setup socket\n");
-        exit(1);
+    if (strcmp(command, "exit") == 0) {
+        if (*active_account >= 0) release_account(*active_account, self);
+        *active_account = -1;
+        snprintf(reply, reply_size, "Have a good day");
+        return 1;
     }
-    while ((clientIdx = accept(serverSocket, (struct sockaddr *)&childSocket, &socketLen)) > 0) {
-        printf("sessionHandler: Client connection from %s, client index %d\n", inet_ntoa(childSocket.sin_addr), clientIdx);
-        for (idx1 = 0; idx1 < MaxSessions; idx1++) {
-            if (childPID[idx1] == 0) {
-                serverPID[idx1] = clientIdx;
-                childPID[idx1] = createChildProcess(socketService, clientIdx);
-                break;
+    if (strcmp(command, "open") == 0) {
+        if (*active_account >= 0) snprintf(reply, reply_size, "Command Error: Session is already open");
+        else if (argument[0] == '\0') snprintf(reply, reply_size, "Command Error: Please provide a name");
+        else if (strlen(argument) >= ACCOUNT_NAME_SIZE) snprintf(reply, reply_size, "Command Error: Name is too long (maximum %d characters)", ACCOUNT_NAME_SIZE - 1);
+        else if (lock_bank() != 0) snprintf(reply, reply_size, "Server error: Could not lock bank data");
+        else {
+            int existing = find_account(argument);
+            if (existing >= 0) snprintf(reply, reply_size, "Command Error: Account name already exists; use start");
+            else if (bank->account_count >= MAX_ACCOUNTS) snprintf(reply, reply_size, "Command Error: Account limit reached");
+            else {
+                int index = (int)bank->account_count++;
+                snprintf(bank->accounts[index].name, sizeof(bank->accounts[index].name), "%s", argument);
+                bank->accounts[index].balance = 0.0;
+                bank->accounts[index].owner_pid = self;
+                *active_account = index;
+                snprintf(reply, reply_size, "Account successfully created - %s", argument);
             }
+            unlock_bank();
         }
-        if (idx1 == MaxSessions)
-            fprintf(stderr, "sessionHandler: Max clients reached\n");
-        socketLen = sizeof(childSocket);
-    }
-    shutdown(serverSocket, SHUT_RDWR);
-    close(serverSocket);
-}
-
-static void displayAccountStatus(int SIGNAL) {
-    int idx1;
-    char *header1 = "Name", *header2 = "Balance";
-    if (SIGNAL == SIGTERM) {
-        puts("Ending Display....");
-        return;
-    }
-    if (pthread_mutex_lock(&bank->mutex) != 0) { 
-        perror("pthread_mutex_lock ERROR"); 
-    }
-    if (bank->accountCounter == 0) {
-        puts("Bank Status: No accounts in bank");
+    } else if (strcmp(command, "start") == 0) {
+        if (*active_account >= 0) snprintf(reply, reply_size, "Command Error: Session is already open");
+        else if (argument[0] == '\0') snprintf(reply, reply_size, "Command Error: Please provide an account name");
+        else if (lock_bank() != 0) snprintf(reply, reply_size, "Server error: Could not lock bank data");
+        else {
+            int index = find_account(argument);
+            if (index < 0) snprintf(reply, reply_size, "Account not found");
+            else if (bank->accounts[index].owner_pid != 0 &&
+                     (kill(bank->accounts[index].owner_pid, 0) == 0 || errno != ESRCH))
+                snprintf(reply, reply_size, "Account is locked by another user");
+            else {
+                bank->accounts[index].owner_pid = self;
+                *active_account = index;
+                snprintf(reply, reply_size, "%s session reopened", bank->accounts[index].name);
+            }
+            unlock_bank();
+        }
+    } else if (strcmp(command, "credit") == 0 || strcmp(command, "debit") == 0) {
+        int is_credit = strcmp(command, "credit") == 0;
+        if (*active_account < 0) snprintf(reply, reply_size, "Start or open an account before using this function");
+        else if (!parse_amount(argument, &amount)) snprintf(reply, reply_size, "Please enter a valid non-negative amount");
+        else if (lock_bank() != 0) snprintf(reply, reply_size, "Server error: Could not lock bank data");
+        else {
+            Account *account = &bank->accounts[*active_account];
+            if (account->owner_pid != self) snprintf(reply, reply_size, "This session no longer owns the account");
+            else if (!is_credit && amount > account->balance) snprintf(reply, reply_size, "Overdraft is not allowed for this account");
+            else {
+                account->balance += is_credit ? amount : -amount;
+                snprintf(reply, reply_size, "%s new balance: %.2f", account->name, account->balance);
+            }
+            unlock_bank();
+        }
+    } else if (strcmp(command, "balance") == 0) {
+        if (*active_account < 0) snprintf(reply, reply_size, "Start or open an account before using balance function");
+        else if (lock_bank() != 0) snprintf(reply, reply_size, "Server error: Could not lock bank data");
+        else {
+            Account *account = &bank->accounts[*active_account];
+            if (account->owner_pid != self) snprintf(reply, reply_size, "This session no longer owns the account");
+            else snprintf(reply, reply_size, "%s current balance: %.2f", account->name, account->balance);
+            unlock_bank();
+        }
+    } else if (strcmp(command, "finish") == 0) {
+        if (*active_account < 0) snprintf(reply, reply_size, "No open account to finish");
+        else if (lock_bank() != 0) snprintf(reply, reply_size, "Server error: Could not lock bank data");
+        else {
+            Account *account = &bank->accounts[*active_account];
+            snprintf(reply, reply_size, "%s transactions finished", account->name);
+            if (account->owner_pid == self) account->owner_pid = 0;
+            *active_account = -1;
+            unlock_bank();
+        }
     } else {
-        printf("%-100s %-12s\n", header1, header2);
-        printf("------------------------------------------------------------------------------------------------------------\n");
-        for (idx1 = 0; idx1 < bank->accountCounter; idx1++) {
-            if (bank->accounts[idx1].inSession) {
-                printf("%-100s %.2f\tIN SERVICE\n", bank->accounts[idx1].name, bank->accounts[idx1].balance);
-            } else {
-                printf("%-100s\t%.2f\n", bank->accounts[idx1].name, bank->accounts[idx1].balance);
-            }
+        snprintf(reply, reply_size, "Unknown command. Use open, start, credit, debit, balance, finish, or exit");
+    }
+    return 0;
+}
+
+static void serve_client(int client_fd) {
+    char line[MAX_INPUT_SIZE + 1];
+    char reply[MAX_INPUT_SIZE + 1];
+    int active_account = -1;
+    int read_result;
+    pid_t self = getpid();
+
+    for (;;) {
+        read_result = socket_read_line(client_fd, line, sizeof(line));
+        if (read_result != 1) break;
+        if (process_command(line, &active_account, reply, sizeof(reply))) {
+            socket_write_line(client_fd, reply);
+            break;
         }
+        if (socket_write_line(client_fd, reply) != 0) break;
     }
-    if (pthread_mutex_unlock(&bank->mutex) != 0) { 
-        perror("pthread_mutex_unlock ERROR"); 
+    release_account(active_account, self);
+    close(client_fd);
+    _exit(0);
+}
+
+static void reap_workers(void) {
+    pid_t ended;
+    while ((ended = waitpid(-1, NULL, WNOHANG)) > 0) {
+        size_t i;
+        for (i = 0; i < MAX_SESSIONS; ++i)
+            if (workers[i] == ended) workers[i] = 0;
     }
 }
 
-static void statusHandler(int timeout) {
-    signal(SIGALRM, displayAccountStatus);
-    while (1) {
-        alarm(timeout);
-        sleep(timeout + 1);
+static int create_shared_bank(void) {
+    pthread_mutexattr_t attributes;
+    int attributes_initialized = 0;
+    int result;
+    shared_memory_id = shmget(IPC_PRIVATE, sizeof(Bank), IPC_CREAT | 0600);
+    if (shared_memory_id < 0) { perror("shmget"); return -1; }
+    bank = (Bank *)shmat(shared_memory_id, NULL, 0);
+    if (bank == (void *)-1) { bank = NULL; perror("shmat"); return -1; }
+    memset(bank, 0, sizeof(*bank));
+    result = pthread_mutexattr_init(&attributes);
+    if (result == 0) attributes_initialized = 1;
+    if (result == 0) result = pthread_mutexattr_setpshared(&attributes, PTHREAD_PROCESS_SHARED);
+    if (result == 0) result = pthread_mutex_init(&bank->mutex, &attributes);
+    if (result == 0) bank_mutex_initialized = 1;
+    if (attributes_initialized) pthread_mutexattr_destroy(&attributes);
+    if (result != 0) { errno = result; perror("initializing process-shared mutex"); return -1; }
+    return 0;
+}
+
+static void destroy_shared_bank(void) {
+    if (bank != NULL) {
+        if (bank_mutex_initialized) pthread_mutex_destroy(&bank->mutex);
+        shmdt(bank);
+        bank = NULL;
+    }
+    if (shared_memory_id >= 0) {
+        shmctl(shared_memory_id, IPC_RMID, NULL);
+        shared_memory_id = -1;
     }
 }
 
-static void sig_handler(int SIGNAL) {
-    if (SIGNAL == SIGINT) {
-        int erre = -1;
-        printf("Server> Exit signal detected Process %d\n", erre);
-        printf("Server> Terminating Session Handler %d\n", childPID[MaxSessions+1]);
-        printf("Server> Terminating Display Handler %d\n", childPID[MaxSessions]);
-        kill(childPID[MaxSessions+1], SIGTERM);
-        kill(childPID[MaxSessions], SIGTERM);
+static int open_server_socket(void) {
+    struct sockaddr_in address;
+    int yes = 1;
+    listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (listen_fd < 0) { perror("socket"); return -1; }
+    if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) < 0) {
+        perror("setsockopt"); close(listen_fd); listen_fd = -1; return -1;
     }
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_ANY);
+    address.sin_port = htons(SERVER_PORT);
+    if (bind(listen_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+        perror("bind (port may already be in use)"); close(listen_fd); listen_fd = -1; return -1;
+    }
+    if (listen(listen_fd, MAX_SESSIONS) < 0) {
+        perror("listen"); close(listen_fd); listen_fd = -1; return -1;
+    }
+    return 0;
 }
 
 int main(void) {
-    int status;
-    memset(childPID, 0, sizeof(childPID));
-    if (allocateMEM() == 1) 
-        deallocateMEM(1);
-    childPID[MaxSessions] = createChildProcess(statusHandler, SessionTimeout);
-    childPID[MaxSessions+1] = createChildProcess(sessionHandler, ServerPort);
-    signal(SIGINT, sig_handler);
-    signal(SIGTERM, sig_handler);
-    waitpid(childPID[MaxSessions], &status, 0);
-    waitpid(childPID[MaxSessions+1], &status, 0);
-    deallocateMEM(0);
+    struct sigaction action;
+    size_t i;
+    memset(workers, 0, sizeof(workers));
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = handle_signal;
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGINT, &action, NULL);
+    sigaction(SIGTERM, &action, NULL);
+
+    if (create_shared_bank() != 0) { destroy_shared_bank(); return 1; }
+    if (open_server_socket() != 0) { destroy_shared_bank(); return 1; }
+    printf("Bank server listening on port %d. Press Ctrl+C to stop.\n", SERVER_PORT);
+
+    while (!stopping) {
+        struct sockaddr_in peer;
+        socklen_t peer_length = sizeof(peer);
+        int client_fd = accept(listen_fd, (struct sockaddr *)&peer, &peer_length);
+        pid_t child;
+        int slot = -1;
+        if (client_fd < 0) {
+            if (errno == EINTR) { reap_workers(); continue; }
+            if (stopping) break;
+            perror("accept");
+            continue;
+        }
+        reap_workers();
+        for (i = 0; i < MAX_SESSIONS; ++i) if (workers[i] == 0) { slot = (int)i; break; }
+        if (slot < 0) {
+            socket_write_line(client_fd, "Server is at its client limit; try again later");
+            close(client_fd);
+            continue;
+        }
+        child = fork();
+        if (child < 0) {
+            perror("fork"); close(client_fd); continue;
+        }
+        if (child == 0) {
+            close(listen_fd);
+            serve_client(client_fd);
+        }
+        workers[slot] = child;
+        close(client_fd);
+        printf("Accepted client from %s (worker PID %ld)\n", inet_ntoa(peer.sin_addr), (long)child);
+    }
+
+    if (listen_fd >= 0) close(listen_fd);
+    for (i = 0; i < MAX_SESSIONS; ++i) if (workers[i] > 0) kill(workers[i], SIGTERM);
+    for (i = 0; i < MAX_SESSIONS; ++i) if (workers[i] > 0) waitpid(workers[i], NULL, 0);
+    destroy_shared_bank();
+    puts("Bank server stopped.");
     return 0;
 }
-
-
