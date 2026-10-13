@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="2600" viewBox="0 0 2000 2600">
+<defs>
+  <style>
+    text{font-family:Arial,Helvetica,sans-serif;fill:#172b4d}
+    .title{font-size:54px;font-weight:700}.sub{font-size:25px;fill:#53657d}
+    .h{font-size:27px;font-weight:700}.body{font-size:21px}.small{font-size:18px;fill:#43546b}
+    .tiny{font-size:16px;fill:#43546b}.mono{font-family:Consolas,monospace;font-size:19px}
+    .card{fill:#fff;stroke:#c7d2e1;stroke-width:2;rx:18}.blue{fill:#eaf3ff;stroke:#5b8def;stroke-width:3;rx:18}
+    .green{fill:#e8f7ef;stroke:#42a875;stroke-width:3;rx:18}.amber{fill:#fff4dd;stroke:#e2a43a;stroke-width:3;rx:18}
+    .purple{fill:#f2edff;stroke:#9173d1;stroke-width:3;rx:18}.red{fill:#fff0ef;stroke:#d77b75;stroke-width:3;rx:18}
+    .lane{fill:#f7f9fc;stroke:#d6deea;stroke-width:2;rx:24}
+    .arrow{fill:none;stroke:#526981;stroke-width:4;marker-end:url(#arrow)}
+    .darrow{fill:none;stroke:#71839a;stroke-width:3;stroke-dasharray:9 8;marker-end:url(#arrow)}
+    .tag{font-size:17px;font-weight:700;fill:#fff}
+  </style>
+  <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M1,1 L11,6 L1,11 Z" fill="#526981"/></marker>
+</defs>
+<rect width="2000" height="2600" fill="#f1f5fa"/>
+<text x="1000" y="86" text-anchor="middle" class="title">BANKING SYSTEM — PROCESS, SOCKET &amp; MUTEX FLOW</text>
+<text x="1000" y="128" text-anchor="middle" class="sub">Concept map for the POSIX C project • TCP request/response • fork per connected client</text>
+
+<!-- top lifecycle -->
+<rect x="65" y="165" width="1870" height="730" class="lane"/>
+<text x="100" y="210" class="h">1 · Server startup and listening socket</text>
+<rect x="100" y="245" width="520" height="150" class="purple"/>
+<text x="130" y="284" class="h">Create shared bank data</text>
+<text x="130" y="321" class="body">shmget(IPC_PRIVATE) allocates a System V</text><text x="130" y="350" class="body">shared-memory segment; shmat() attaches it.</text>
+<text x="130" y="378" class="small">Accounts, balances, owner PIDs; RAM only.</text>
+<rect x="740" y="245" width="520" height="150" class="amber"/>
+<text x="770" y="284" class="h">Initialize process-shared mutex</text>
+<text x="770" y="321" class="body">pthread_mutexattr_setpshared(…,</text><text x="770" y="350" class="mono">PTHREAD_PROCESS_SHARED)</text>
+<text x="770" y="378" class="small">One lock protects shared account data.</text>
+<rect x="1380" y="245" width="500" height="150" class="blue"/>
+<text x="1410" y="284" class="h">Create listening TCP socket</text>
+<text x="1410" y="321" class="body">socket() → setsockopt(SO_REUSEADDR)</text><text x="1410" y="350" class="body">→ bind(INADDR_ANY, port 1080)</text>
+<text x="1410" y="378" class="body">→ listen(backlog 20)</text>
+<path d="M620 320 H725" class="arrow"/><path d="M1260 320 H1365" class="arrow"/>
+<rect x="620" y="460" width="760" height="120" class="green"/>
+<text x="1000" y="505" text-anchor="middle" class="h">accept() waits for the next client</text>
+<text x="1000" y="542" text-anchor="middle" class="body">Returns a NEW connected socket; listening socket stays open.</text>
+<path d="M1630 395 V430 H1385" class="arrow"/><path d="M1000 395 V445" class="arrow"/>
+<rect x="100" y="640" width="820" height="170" class="blue"/>
+<text x="135" y="680" class="h">fork() creates one worker process per client</text>
+<text x="135" y="720" class="body">Child: closes its listening-socket copy; serves this client.</text>
+<text x="135" y="753" class="body">Parent: records child PID, closes its client-socket copy,</text>
+<text x="135" y="782" class="body">then returns to accept() for more connections.</text>
+<rect x="1080" y="640" width="800" height="170" class="amber"/>
+<text x="1115" y="680" class="h">Shared memory survives fork()</text>
+<text x="1115" y="720" class="body">Parent and worker processes see the same attached Bank.</text>
+<text x="1115" y="753" class="body">The process-shared mutex prevents simultaneous data</text>
+<text x="1115" y="782" class="body">updates. Worker processes are reaped with waitpid().</text>
+<path d="M1000 580 V615 H510 V625" class="arrow"/><path d="M1000 615 H1470 V625" class="darrow"/>
+
+<!-- client/server communication -->
+<rect x="65" y="930" width="1870" height="510" class="lane"/>
+<text x="100" y="975" class="h">2 · Client connects and exchanges newline-delimited messages</text>
+<rect x="100" y="1020" width="540" height="175" class="blue"/>
+<text x="135" y="1060" class="h">CLIENT · bankclient</text>
+<text x="135" y="1098" class="body">getaddrinfo(host, 1080) resolves host</text>
+<text x="135" y="1128" class="body">socket() creates endpoint</text>
+<text x="135" y="1158" class="body">connect() opens TCP connection</text>
+<rect x="740" y="1020" width="520" height="175" class="green"/>
+<text x="1000" y="1060" text-anchor="middle" class="h">TCP connection</text>
+<text x="1000" y="1098" text-anchor="middle" class="body">Byte stream — no message boundaries.</text>
+<text x="1000" y="1128" text-anchor="middle" class="body">Newline marks end of each command</text>
+<text x="1000" y="1158" text-anchor="middle" class="body">and each server response.</text>
+<rect x="1360" y="1020" width="520" height="175" class="purple"/>
+<text x="1395" y="1060" class="h">SERVER · worker process</text>
+<text x="1395" y="1098" class="body">serve_client() reads one line</text>
+<text x="1395" y="1128" class="body">→ process_command() → reply line</text>
+<text x="1395" y="1158" class="body">→ waits for next command</text>
+<path d="M640 1105 H725" class="arrow"/><path d="M1260 1105 H1345" class="arrow"/>
+<text x="680" y="1087" class="tiny" text-anchor="middle">connect</text>
+<text x="1300" y="1087" class="tiny" text-anchor="middle">accept</text>
+<path d="M1345 1245 H650" class="darrow"/>
+<text x="1000" y="1230" class="small" text-anchor="middle">Command to server → · ← reply to client</text>
+<rect x="100" y="1280" width="1780" height="115" class="card"/>
+<text x="135" y="1322" class="h">Socket helpers on both sides</text>
+<text x="135" y="1362" class="body">socket_write_line() loops until all bytes send; socket_read_line() reads through newline, strips CR, detects disconnect/error/oversize.</text>
+
+<!-- command processing -->
+<rect x="65" y="1475" width="1870" height="640" class="lane"/>
+<text x="100" y="1520" class="h">3 · Each command is parsed and handled inside the worker</text>
+<rect x="100" y="1560" width="480" height="155" class="purple"/>
+<text x="130" y="1600" class="h">Parse command + argument</text>
+<text x="130" y="1638" class="body">process_command() separates first word</text><text x="130" y="1668" class="body">from the remaining name/amount.</text>
+<text x="130" y="1698" class="small">One active account index per client worker.</text>
+<rect x="680" y="1560" width="520" height="155" class="amber"/>
+<text x="710" y="1600" class="h">Lock shared Bank before access</text>
+<text x="710" y="1638" class="body">lock_bank() → inspect/update accounts</text><text x="710" y="1668" class="body">→ unlock_bank() → format response</text>
+<text x="710" y="1698" class="small">Short critical section protects consistency.</text>
+<rect x="1300" y="1560" width="580" height="155" class="green"/>
+<text x="1330" y="1600" class="h">Return response and repeat</text>
+<text x="1330" y="1638" class="body">socket_write_line() sends reply.</text><text x="1330" y="1668" class="body">Client prints it, then prompts again.</text>
+<text x="1330" y="1698" class="small">This is request → response, not a client thread.</text>
+<path d="M580 1638 H665" class="arrow"/><path d="M1200 1638 H1285" class="arrow"/>
+<rect x="100" y="1760" width="1780" height="285" class="card"/>
+<text x="135" y="1805" class="h">Account command behaviors</text>
+<text x="145" y="1850" class="body"><tspan font-weight="700">open name</tspan> — validate name; reject duplicate/full bank; create zero-balance account; set owner_pid.</text>
+<text x="145" y="1892" class="body"><tspan font-weight="700">start name</tspan> — find account; reject a live owner; claim available/stale session for this worker PID.</text>
+<text x="145" y="1934" class="body"><tspan font-weight="700">credit amount / debit amount</tspan> — require active ownership and finite non-negative amount; debit blocks overdraft.</text>
+<text x="145" y="1976" class="body"><tspan font-weight="700">balance</tspan> — report active account balance.  <tspan font-weight="700">finish</tspan> — clear owner_pid; keep account for later start.</text>
+<text x="145" y="2018" class="body"><tspan font-weight="700">exit</tspan> — release account, reply, close connection. Unknown command → explanatory error reply.</text>
+<path d="M1000 1715 V1745" class="arrow"/>
+
+<!-- end/lifecycle -->
+<rect x="65" y="2150" width="1870" height="365" class="lane"/>
+<text x="100" y="2195" class="h">4 · Disconnect, shutdown, and important system concepts</text>
+<rect x="100" y="2230" width="800" height="220" class="red"/>
+<text x="135" y="2272" class="h">Client disconnect / worker cleanup</text>
+<text x="135" y="2312" class="body">release_account() clears session ownership if this worker</text>
+<text x="135" y="2342" class="body">owns it → close(client socket) → _exit(0).</text>
+<text x="135" y="2382" class="small">Parent later waitpid() reaps finished child process.</text>
+<text x="135" y="2415" class="small">Ctrl+C: signal flag → accept interrupted → stop workers →</text>
+<text x="135" y="2440" class="small">destroy mutex → shmdt() → shmctl(IPC_RMID).</text>
+<rect x="1000" y="2230" width="880" height="220" class="blue"/>
+<text x="1035" y="2272" class="h">Concepts to remember</text>
+<text x="1035" y="2312" class="body">• fork = process creation; this project creates no threads.</text>
+<text x="1035" y="2342" class="body">• Shared memory = common data; process-shared mutex = protection.</text>
+<text x="1035" y="2372" class="body">• Listening socket accepts; connected socket carries client data.</text>
+<text x="1035" y="2402" class="body">• Account data is RAM-only and resets when server exits.</text>
+<text x="1035" y="2432" class="body">• One global mutex serializes protected account operations.</text>
+<text x="1000" y="2565" text-anchor="middle" class="sub">Port 1080 • Max 20 accounts • Max 20 active client workers • Accounts are not saved to disk</text>
+</svg>

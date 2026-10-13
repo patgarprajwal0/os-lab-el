@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="2500" viewBox="0 0 1600 2500">
+<defs><style>
+text{font-family:Arial,Helvetica,sans-serif;fill:#172b4d}.title{font-size:48px;font-weight:700}.sub{font-size:23px;fill:#53657d}.head{font-size:26px;font-weight:700}.body{font-size:21px}.small{font-size:18px;fill:#43546b}.mono{font-family:Consolas,monospace;font-size:20px}.lane{fill:#f7f9fc;stroke:#d6deea;stroke-width:2;rx:24}.blue{fill:#eaf3ff;stroke:#5b8def;stroke-width:3;rx:18}.green{fill:#e8f7ef;stroke:#42a875;stroke-width:3;rx:18}.amber{fill:#fff4dd;stroke:#e2a43a;stroke-width:3;rx:18}.purple{fill:#f2edff;stroke:#9173d1;stroke-width:3;rx:18}.red{fill:#fff0ef;stroke:#d77b75;stroke-width:3;rx:18}.arrow{fill:none;stroke:#526981;stroke-width:4;marker-end:url(#arr)}.dash{fill:none;stroke:#71839a;stroke-width:3;stroke-dasharray:9 8;marker-end:url(#arr)}.label{font-size:17px;font-weight:700;fill:#43546b}
+</style><marker id="arr" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M1 1 L11 6 L1 11Z" fill="#526981"/></marker></defs>
+<rect width="1600" height="2500" fill="#f1f5fa"/>
+<text x="800" y="75" text-anchor="middle" class="title">WHAT HAPPENS WHEN A BANK CLIENT RUNS</text>
+<text x="800" y="115" text-anchor="middle" class="sub">Client process lifecycle • one command and one server response at a time</text>
+
+<rect x="50" y="150" width="1500" height="410" class="lane"/>
+<text x="90" y="198" class="head">1 · Start client and connect to the server</text>
+<rect x="100" y="230" width="470" height="120" class="blue"/>
+<text x="335" y="275" text-anchor="middle" class="head">Run with hostname</text><text x="335" y="315" text-anchor="middle" class="mono">./bankclient localhost</text>
+<rect x="655" y="230" width="400" height="120" class="purple"/>
+<text x="855" y="275" text-anchor="middle" class="head">main(argc, argv)</text><text x="855" y="315" text-anchor="middle" class="body">check exactly one hostname argument</text>
+<polygon points="1280,220 1450,290 1280,360 1110,290" fill="#fff4dd" stroke="#e2a43a" stroke-width="3"/>
+<text x="1280" y="285" text-anchor="middle" class="head">hostname provided?</text><text x="1280" y="318" text-anchor="middle" class="small">argc must be 2</text>
+<path d="M570 290 H640" class="arrow"/><path d="M1055 290 H1095" class="arrow"/>
+<path d="M1280 360 V395 H1335 V400" class="arrow"/><text x="1295" y="390" class="label">NO</text>
+<rect x="1165" y="405" width="340" height="100" class="red"/><text x="1335" y="447" text-anchor="middle" class="head">Print usage and exit</text><text x="1335" y="480" text-anchor="middle" class="small">no socket created</text>
+<path d="M1220 340 L900 385 V390" class="arrow"/><text x="1050" y="370" class="label">YES</text>
+<rect x="450" y="400" width="450" height="115" class="green"/><text x="675" y="445" text-anchor="middle" class="head">connect_to_server(host)</text><text x="675" y="485" text-anchor="middle" class="body">resolve name and connect to TCP port 1080</text>
+
+<rect x="50" y="590" width="1500" height="445" class="lane"/>
+<text x="90" y="638" class="head">2 · Resolve hostname and establish TCP connection</text>
+<rect x="100" y="680" width="390" height="130" class="purple"/><text x="295" y="725" text-anchor="middle" class="head">getaddrinfo()</text><text x="295" y="765" text-anchor="middle" class="body">hostname + service "1080"</text><text x="295" y="792" text-anchor="middle" class="small">returns candidate addresses</text>
+<rect x="605" y="680" width="390" height="130" class="blue"/><text x="800" y="725" text-anchor="middle" class="head">For each address</text><text x="800" y="765" text-anchor="middle" class="body">socket() → connect()</text><text x="800" y="792" text-anchor="middle" class="small">try next address if connection fails</text>
+<polygon points="1300,670 1470,745 1300,820 1130,745" fill="#fff4dd" stroke="#e2a43a" stroke-width="3"/><text x="1300" y="740" text-anchor="middle" class="head">connected?</text><text x="1300" y="774" text-anchor="middle" class="small">valid socket</text>
+<path d="M490 745 H590" class="arrow"/><path d="M995 745 H1115" class="arrow"/>
+<rect x="100" y="870" width="530" height="110" class="red"/><text x="365" y="915" text-anchor="middle" class="head">No address connected</text><text x="365" y="952" text-anchor="middle" class="body">report error; exit</text>
+<path d="M1300 820 V850 H365 V855" class="arrow"/><text x="1318" y="846" class="label">NO · no addresses left</text>
+<rect x="865" y="870" width="580" height="110" class="green"/><text x="1155" y="915" text-anchor="middle" class="head">Connection established</text><text x="1155" y="952" text-anchor="middle" class="body">print command help; enter input loop</text>
+<path d="M1470 745 H1510 V845 H1155 V855" class="arrow"/><text x="1480" y="735" class="label">YES</text>
+
+<rect x="50" y="1065" width="1500" height="950" class="lane"/>
+<text x="90" y="1113" class="head">3 · Interactive command and response loop</text>
+<rect x="520" y="1150" width="560" height="110" class="blue"/><text x="800" y="1195" text-anchor="middle" class="head">Prompt and read input</text><text x="800" y="1235" text-anchor="middle" class="body">getline(stdin) reads one user command</text>
+<path d="M1155 980 V1120 H800 V1135" class="arrow"/>
+<polygon points="800,1300 1000,1370 800,1440 600,1370" fill="#fff4dd" stroke="#e2a43a" stroke-width="3"/><text x="800" y="1365" text-anchor="middle" class="head">input received?</text><text x="800" y="1398" text-anchor="middle" class="small">EOF or a line</text>
+<path d="M800 1260 V1285" class="arrow"/>
+<rect x="110" y="1330" width="380" height="130" class="amber"/><text x="300" y="1375" text-anchor="middle" class="head">End of input (EOF)</text><text x="300" y="1415" text-anchor="middle" class="body">send exit; read final reply</text><text x="300" y="1442" text-anchor="middle" class="small">then clean up</text>
+<path d="M600 1370 H505" class="arrow"/><text x="545" y="1350" class="label">EOF</text>
+<rect x="1110" y="1330" width="380" height="130" class="purple"/><text x="1300" y="1375" text-anchor="middle" class="head">Normalize input</text><text x="1300" y="1415" text-anchor="middle" class="body">strip CR/LF; skip blank line</text><text x="1300" y="1442" text-anchor="middle" class="small">reject command over 256 chars</text>
+<path d="M1000 1370 H1095" class="arrow"/><text x="1030" y="1350" class="label">LINE</text>
+<rect x="110" y="1530" width="430" height="145" class="blue"/><text x="325" y="1575" text-anchor="middle" class="head">Send command</text><text x="325" y="1615" text-anchor="middle" class="body">socket_write_line()</text><text x="325" y="1645" text-anchor="middle" class="small">append newline; send all bytes</text>
+<rect x="585" y="1530" width="430" height="145" class="green"/><text x="800" y="1575" text-anchor="middle" class="head">Server handles request</text><text x="800" y="1615" text-anchor="middle" class="body">accepting worker reads line</text><text x="800" y="1645" text-anchor="middle" class="small">processes command under Bank mutex</text>
+<rect x="1060" y="1530" width="430" height="145" class="purple"/><text x="1275" y="1575" text-anchor="middle" class="head">Wait for server reply</text><text x="1275" y="1615" text-anchor="middle" class="body">socket_read_line()</text><text x="1275" y="1645" text-anchor="middle" class="small">read through response newline</text>
+<path d="M1300 1460 V1500 H325 V1515" class="arrow"/><path d="M300 1460 V1510 H325 V1515" class="dash"/><path d="M540 1600 H570" class="arrow"/><path d="M1015 1600 H1045" class="arrow"/>
+<rect x="585" y="1760" width="430" height="110" class="amber"/><text x="800" y="1805" text-anchor="middle" class="head">Print response</text><text x="800" y="1845" text-anchor="middle" class="body">server&gt; response text</text>
+<path d="M1275 1675 V1715 H800 V1745" class="arrow"/>
+<polygon points="800,1900 970,1960 800,2020 630,1960" fill="#fff4dd" stroke="#e2a43a" stroke-width="3"/><text x="800" y="1955" text-anchor="middle" class="head">command == exit?</text><text x="800" y="1985" text-anchor="middle" class="small">exact text "exit"</text>
+<path d="M800 1870 V1885" class="arrow"/>
+<path d="M630 1960 H75 V1205 H500" class="dash"/><text x="350" y="1940" class="label">NO · prompt again</text>
+<path d="M970 1960 H1530 V2135 H300 V2145" class="arrow"/><text x="1015" y="1940" class="label">YES</text>
+
+<rect x="50" y="2070" width="1500" height="360" class="lane"/>
+<text x="90" y="2118" class="head">4 · Exit, disconnect, or socket error</text>
+<rect x="100" y="2160" width="400" height="150" class="red"/><text x="300" y="2205" text-anchor="middle" class="head">Leave input loop</text><text x="300" y="2245" text-anchor="middle" class="body">exit command, EOF, or I/O error</text><text x="300" y="2280" text-anchor="middle" class="small">server may close its worker socket</text>
+<rect x="600" y="2160" width="400" height="150" class="blue"/><text x="800" y="2205" text-anchor="middle" class="head">Release client resources</text><text x="800" y="2245" text-anchor="middle" class="body">free getline buffer</text><text x="800" y="2280" text-anchor="middle" class="small">close(socket_fd)</text>
+<rect x="1100" y="2160" width="400" height="150" class="green"/><text x="1300" y="2205" text-anchor="middle" class="head">Client process ends</text><text x="1300" y="2245" text-anchor="middle" class="body">return success/failure status</text><text x="1300" y="2280" text-anchor="middle" class="small">server parent reaps worker later</text>
+<path d="M500 2235 H585" class="arrow"/><path d="M1000 2235 H1085" class="arrow"/>
+<text x="800" y="2380" text-anchor="middle" class="sub">No client thread is created: this client handles one command, waits for its reply, then prompts again.</text>
+</svg>
